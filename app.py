@@ -100,6 +100,51 @@ def program_stale():
         return False
 
 
+# --------------------------------------------------------------------------
+# 「关掉窗口就退出」
+#
+# 界面每 3 秒发一次心跳；关窗口（或刷新）时浏览器会补发一个 pagehide 通知。
+# 收到通知后先不急，等 12 秒看看还有没有心跳：
+#   · 还在跳 → 说明是刷新、或者还有别的窗口开着 → 不退出
+#   · 没心跳 → 界面真的都关了 → 自己退出，不留后台进程
+# --------------------------------------------------------------------------
+CLIENT_HEARTBEAT = 3.0      # 界面心跳间隔
+CLIENT_TIMEOUT = 8.0        # 超过这么久没心跳，就认为界面没了
+QUIT_GRACE = 12.0           # 收到 pagehide 后等这么久再决定
+_last_seen = 0.0
+_quit_scheduled = False
+
+
+def mark_client_alive():
+    """界面还在（心跳或任意一次接口调用都算）"""
+    global _last_seen
+    _last_seen = time.time()
+
+
+def schedule_auto_quit(server):
+    """界面报告"窗口要关了"—— 稍后确认没人了就把自己关掉"""
+    global _quit_scheduled
+    if _quit_scheduled:
+        return
+    _quit_scheduled = True
+
+    def worker():
+        global _quit_scheduled
+        time.sleep(QUIT_GRACE)
+        idle = time.time() - _last_seen
+        if idle < CLIENT_TIMEOUT:
+            _quit_scheduled = False
+            log("窗口只是刷新 / 或还有别的窗口开着，继续运行")
+            return
+        log("界面已全部关闭，自动退出")
+        try:
+            server.shutdown()
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 DEFAULT_CONFIG = {
     "repo_url": "",
     "token": "",
@@ -1417,8 +1462,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_text("403 越权访问", 403)
             return
 
-        # 闸门三：改数据的请求必须是 JSON —— 逼浏览器发预检，跨站自然过不来
-        if path.startswith("/api/") and method == "POST":
+        # 闸门三：改数据的请求必须是 JSON —— 逼浏览器发预检，跨站自然过不来。
+        # 例外：页面卸载时用 sendBeacon 补发的那两条，它的 Content-Type 由浏览器
+        # 决定、不好控；这两条也无害（最多让"没人了"时退出），Origin 闸门仍然管着。
+        BEACON = ("/api/pagehide", "/api/alive")
+        if path.startswith("/api/") and method == "POST" and path not in BEACON:
             ctype = (self.headers.get("Content-Type") or "").lower()
             if not ctype.startswith("application/json"):
                 self.send_json({"ok": False,
@@ -1426,6 +1474,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         # ---- API ----
+        if path.startswith("/api/"):
+            mark_client_alive()          # 有界面在调接口，就算它还活着
+
+        if path == "/api/alive" and method == "POST":
+            self.send_json({"ok": True, "timeout": CLIENT_TIMEOUT})
+            return
+
+        if path == "/api/pagehide":
+            # 浏览器在页面卸载时补发的最后一条消息（sendBeacon）
+            schedule_auto_quit(self.server)
+            self.send_json({"ok": True, "grace": QUIT_GRACE})
+            return
+
         if path == "/api/ping" and method == "GET":
             # 供新实例判断"是不是已经有一个群日记在跑"
             self.send_json({
@@ -1816,6 +1877,113 @@ def kill_stale_instances():
         return []
 
 
+def listening_map():
+    """{端口号: {进程号}} —— 一次 netstat 全拿到。
+
+    netstat 只报端口和 PID，不需要读别的进程的命令行，
+    权限要求比 WMI 低得多，所以在普通账户下也靠得住。
+    """
+    table = {}
+    try:
+        proc = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=25, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
+                try:
+                    port = int(parts[1].rsplit(":", 1)[-1])
+                except ValueError:
+                    continue
+                table.setdefault(port, set()).add(parts[4])
+    except Exception as exc:
+        log(f"netstat 失败：{exc}")
+    return table
+
+
+def is_python_process(pid):
+    """这个进程是不是 python？
+
+    返回 True / False / None（判断不了）。用两条路子问，任一条答上来就行；
+    都答不上来就返回 None —— 调用方只在明确 True 时才动手，绝不误杀。
+    """
+    # 路子一：tasklist（最快）
+    try:
+        proc = subprocess.run(
+            ["tasklist", "/FI", "PID eq %s" % pid, "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        rows = [x for x in (proc.stdout or "").strip().splitlines() if x.strip()]
+        if rows and rows[0].lstrip().startswith('"'):
+            return rows[0].lstrip('"').lower().startswith("python")
+    except Exception:
+        pass
+    # 路子二：WMI
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "(Get-CimInstance Win32_Process -Filter \"ProcessId=%s\").Name" % pid],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=25, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        name = (proc.stdout or "").strip().lower()
+        if name and " " not in name:
+            return name.startswith("python")
+    except Exception:
+        pass
+    return None
+
+
+def is_diary_instance(port):
+    """这个端口上跑的是不是「本程序的正常实例」。
+
+    返回 True（是本程序）/ False（确定不是，比如旧版本不认 /api/ping）/
+    None（连不上，判断不了）。只有明确 False 才允许动手，宁可漏杀不可错杀。
+    """
+    try:
+        with urllib.request.urlopen(
+                "http://127.0.0.1:%d/api/ping" % port, timeout=1.5) as r:
+            return json.loads(r.read().decode("utf-8")).get("app") == APP_TAG
+    except urllib.error.HTTPError:
+        return False            # 服务器有应答，只是不认这个接口 → 旧版本
+    except Exception:
+        return None             # 连不上/超时 → 不确定，别乱动
+
+
+def kill_port_squatters(low=8756, high=8796):
+    """结束霸占端口的残留实例。
+
+    只按「端口号 + 进程号」动手，不读别人的命令行，普通账户下也靠得住。
+    两道保险：只杀 python 进程；能正常应答 /api/ping 的实例一律不动。
+    """
+    killed, me = [], str(os.getpid())
+    table = listening_map()
+    for port in sorted(table):
+        if not (low <= port < high):
+            continue
+        if is_diary_instance(port) is not False:
+            continue                       # 是本程序、或判断不了 → 都留着
+        for pid in sorted(table[port]):
+            if pid == me or pid == "0":
+                continue
+            if is_python_process(pid) is not True:
+                log(f"端口 {port} 的进程 {pid} 不是 python 或判断不了，不动它")
+                continue
+            try:
+                r = subprocess.run(
+                    ["taskkill", "/F", "/PID", pid],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if r.returncode == 0:
+                    killed.append(pid)
+                    log(f"已结束残留实例 PID {pid}（占着端口 {port}）")
+                else:
+                    log(f"结束 PID {pid} 失败：{((r.stdout or '') + (r.stderr or ''))[:200]}")
+            except Exception as exc:
+                log(f"结束 PID {pid} 异常：{exc}")
+    return killed
+
+
 BROWSER_CANDIDATES = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -1914,7 +2082,15 @@ def main():
     ensure_dirs()
 
     if not force_new and port is None:
-        # ① 已经有一个「新版群日记」在跑 → 直接把窗口指过去，不再重复启动
+        # ① 先按端口清残留：只认端口号和进程号，普通账户下也靠得住。
+        #    能正常应答 /api/ping 的实例不动，所以不会误伤正在用的那一个。
+        squatters = kill_port_squatters()
+        if squatters:
+            say("清理了 %d 个残留实例：%s" % (len(squatters), "、".join(squatters)))
+            log("按端口清理残留实例：" + "、".join(squatters))
+            time.sleep(0.8)
+
+        # ② 已经有一个「新版群日记」在跑 → 直接把窗口指过去，不再重复启动
         running = find_running_instance()
         if running:
             say("检测到群日记已经在运行：" + running)
@@ -1924,7 +2100,7 @@ def main():
                 open_app_window(running)
             return
 
-        # ② 端口上有旧版实例（不认识 /api/ping）霸着 → 清掉再启动
+        # ③ 再用 WMI 兜一次（有些实例可能没监听端口，比如刚好卡在启动阶段）
         killed = kill_stale_instances()
         if killed:
             say("清理了 %d 个残留的旧实例：%s" % (len(killed), "、".join(killed)))

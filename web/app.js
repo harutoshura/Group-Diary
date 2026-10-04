@@ -1664,8 +1664,35 @@ function applyUrlParams() {
   if (p.get('msadd')) state.pendingMsAdd = true;
 }
 
+// ---- 关掉窗口就把后台一起关掉 ----
+// 界面每 3 秒报一次平安；窗口关掉（或刷新）时浏览器会在页面卸载前补发 pagehide。
+// 后台收到 pagehide 后等 12 秒，这期间没有心跳才真的退出 ——
+// 所以「刷新」不会误退（新页面马上又开始跳），而「关窗口」会把后台进程一起带走。
+function startAutoQuitWatch() {
+  const beat = () => {
+    fetch('/api/alive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }).catch(() => {});
+  };
+  beat();
+  setInterval(beat, 3000);
+
+  window.addEventListener('pagehide', () => {
+    try {
+      // sendBeacon 是专门给"页面要没了"用的，浏览器保证会把它发出去
+      navigator.sendBeacon('/api/pagehide',
+        new Blob(['{}'], { type: 'application/json' }));
+    } catch (e) {
+      // 极老的浏览器没有 sendBeacon：退化成本来的样子（后台留着），不影响使用
+    }
+  });
+}
+
 (async function start() {
   bind();
+  startAutoQuitWatch();
   applyUrlParams();
   await loadState();
   if (state.pendingOpen) {
