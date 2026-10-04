@@ -1,0 +1,24 @@
+# 统一换行符，避免不同电脑上 git 的 core.autocrlf 设置把文件改来改去，
+# 也避免日记被检出成 CRLF（那样正文每行末尾会多一个 \r）。
+
+* text=auto eol=lf
+
+# 批处理文件必须是 CRLF，否则 Windows 的 cmd 可能解析出错
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件不做任何转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.mp3 binary
+*.wav binary
+*.flac binary
+*.ogg binary
+*.m4a binary
+*.aac binary
+*.opus binary
+*.zip binary

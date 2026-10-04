@@ -1,0 +1,6 @@
+config.json
+logs/
+.trash/
+.browser-profile/
+__pycache__/
+*.pyc

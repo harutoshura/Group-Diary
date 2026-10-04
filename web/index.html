@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>群日记</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📔</text></svg>">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ================= 顶栏 ================= -->
+  <header class="topbar">
+    <div class="brand"><span class="logo">📔</span><span class="brand-name">群日记</span></div>
+
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input id="search" type="search" placeholder="搜索关键词，定位出现过的日记…" autocomplete="off">
+      <button id="searchClear" class="ghost-mini" hidden>×</button>
+    </div>
+
+    <div class="date-jump" title="直接输入日期（如 2026.7.13），精确找到那一天的日记">
+      <span>跳到某天</span>
+      <input id="jumpDateText" type="text" placeholder="如 2026.7.13"
+             autocomplete="off" spellcheck="false" inputmode="numeric">
+      <button id="btnJumpCalendar" class="mini-icon" title="用日历选择" type="button">📅</button>
+      <input id="jumpDatePicker" type="date" class="hidden-picker" tabindex="-1" aria-hidden="true">
+    </div>
+
+    <div class="spacer"></div>
+
+    <button id="btnMilestone" class="btn ms-open" title="大事记：把这群人经历的大事按时间记下来">
+      <span class="ms-open-icon">📌</span> 大事记
+    </button>
+    <button id="gitBadge" class="badge" title="点击打开 GitHub 同步面板">Git 状态</button>
+    <button id="btnNew" class="btn primary">＋ 写日记</button>
+    <button id="btnTheme" class="btn icon" title="切换深浅色">🌙</button>
+    <button id="btnQuit" class="btn icon" title="退出程序（关闭后台服务）">⏻</button>
+  </header>
+
+  <!-- 前后端版本错配时的提示条 -->
+  <div id="staleBar" class="stale-bar" hidden>
+    <span>⚠ 程序文件已经更新，但当前运行的还是<b>旧版本</b>，新加的功能点下去会报错。</span>
+    <span class="stale-how">点右上角 <b>⏻</b> 退出，然后重新双击 <b>启动群日记.pyw</b> 就好。</span>
+  </div>
+
+  <!-- ================= 主体 ================= -->
+  <div class="body">
+
+    <!-- ---------- 侧栏筛选 ---------- -->
+    <aside class="sidebar">
+      <div class="side-block">
+        <div class="side-title">记录人</div>
+        <div id="recorderChips" class="chips"></div>
+      </div>
+
+      <div class="side-block">
+        <div class="side-title">年份</div>
+        <div id="yearChips" class="chips"></div>
+      </div>
+
+      <div class="side-block">
+        <div class="side-title">月份</div>
+        <div id="monthChips" class="chips months"></div>
+      </div>
+
+      <div class="side-block">
+        <div class="side-title">星期</div>
+        <div id="weekChips" class="chips"></div>
+      </div>
+
+      <div class="side-block">
+        <button id="btnClearFilters" class="btn block">清除全部筛选</button>
+        <div class="side-stats">
+          <div><span id="statShown">0</span> / <span id="statTotal">0</span> 篇</div>
+          <div class="muted" id="statHint">共 0 条记录</div>
+        </div>
+        <div class="side-actions">
+          <button id="btnOpenDiaryFolder" class="linkish">📂 打开日记文件夹</button>
+          <button id="btnCleanup" class="linkish"
+                  title="结束所有还在后台运行的群日记进程（旧实例会霸占端口，让新功能点了没反应）">🧹 清理残留进程</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ---------- 列表 ---------- -->
+    <main class="list-pane">
+      <div class="list-head">
+        <div id="listTitle" class="list-title">全部日记</div>
+        <select id="sortSel" class="mini-select">
+          <option value="date-desc">日期：新 → 旧</option>
+          <option value="date-asc">日期：旧 → 新</option>
+          <option value="recorder">按记录人</option>
+          <option value="count">按条数</option>
+        </select>
+      </div>
+      <div id="cards" class="cards"></div>
+    </main>
+
+    <!-- ---------- 分界线：拖动调比例 / 点按钮交换左右 ---------- -->
+    <div id="splitter" class="splitter" hidden>
+      <button id="btnSwapPanes" class="swap-btn" type="button"
+              title="交换「列表」和「正文」的左右位置">⇄</button>
+    </div>
+
+    <!-- ---------- 阅读面板 ---------- -->
+    <section id="reader" class="reader" hidden>
+      <div class="reader-head">
+        <div class="reader-headline">
+          <div id="readerDate" class="reader-date"></div>
+          <div class="reader-sub">
+            <span id="readerWeekday" class="tag"></span>
+            <span id="readerRecorder" class="recorder-pill"></span>
+          </div>
+        </div>
+        <div class="reader-tools">
+          <button id="readerPrev" class="btn icon" title="上一篇">↑</button>
+          <button id="readerNext" class="btn icon" title="下一篇">↓</button>
+          <button id="btnEdit" class="btn icon" title="编辑">✏️</button>
+          <button id="btnDelete" class="btn icon danger" title="删除">🗑</button>
+          <button id="btnCloseReader" class="btn icon" title="关闭">✕</button>
+        </div>
+      </div>
+
+      <div id="readerWarn" class="warn" hidden></div>
+      <div id="readerItems" class="reader-items"></div>
+
+      <div class="reader-foot">
+        <button id="btnCopy" class="linkish">📋 复制正文</button>
+        <button id="btnReveal" class="linkish">📄 用记事本打开</button>
+        <span class="font-ctl" title="调整正文字号">
+          <button id="btnFontDown" class="mini-icon" type="button">A−</button>
+          <span id="fontLabel" class="font-size-num">15</span>
+          <button id="btnFontUp" class="mini-icon" type="button">A+</button>
+          <button id="btnFontReset" class="mini-icon" type="button" title="恢复默认字号">↺</button>
+        </span>
+        <span id="readerFile" class="muted"></span>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ================= 播放器 ================= -->
+  <footer class="player">
+    <div class="np">
+      <div class="np-icon" id="npIcon">♪</div>
+      <div class="np-text">
+        <div id="trackName" class="np-name">未选择音源</div>
+        <div id="trackKind" class="np-kind">把音频放进 music 文件夹即可自动出现</div>
+      </div>
+    </div>
+
+    <div class="transport">
+      <button id="btnPrev" class="btn icon" title="上一首">⏮</button>
+      <button id="btnPlay" class="btn play" title="播放 / 暂停">▶</button>
+      <button id="btnNext" class="btn icon" title="下一首">⏭</button>
+    </div>
+
+    <div class="progress">
+      <span id="curTime" class="time">0:00</span>
+      <input id="seek" class="range" type="range" min="0" max="1000" value="0" step="1">
+      <span id="durTime" class="time">0:00</span>
+    </div>
+
+    <div class="vol">
+      <button id="btnMute" class="btn icon" title="静音">🔊</button>
+      <input id="volume" class="range vrange" type="range" min="0" max="100" value="60">
+    </div>
+
+    <div class="player-tools">
+      <button id="btnLoop" class="btn icon" title="循环模式">🔁</button>
+      <button id="btnPlaylist" class="btn icon" title="播放列表">☰</button>
+      <button id="btnMusicRefresh" class="btn icon" title="重新扫描音源">⟳</button>
+      <button id="btnOpenMusic" class="btn icon" title="打开 music 文件夹">📂</button>
+      <button id="btnEditSources" class="btn icon" title="编辑音源清单 sources.txt">📝</button>
+    </div>
+
+    <div id="playlist" class="playlist" hidden>
+      <div class="playlist-head">
+        <span>播放列表</span>
+        <button id="btnPlaylistClose" class="ghost-mini">×</button>
+      </div>
+      <div id="playlistItems" class="playlist-items"></div>
+      <div class="playlist-foot muted" id="playlistHint"></div>
+    </div>
+
+    <audio id="audio" preload="metadata"></audio>
+  </footer>
+
+</div>
+
+<!-- ================= 编辑弹窗 ================= -->
+<div id="editorModal" class="modal" hidden>
+  <div class="modal-box wide">
+    <div class="modal-head">
+      <h2 id="editorTitle">写日记</h2>
+      <button class="ghost-mini" data-close="editorModal">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-row">
+        <label>日期
+          <input id="edDate" type="date" required>
+        </label>
+        <label>记录人
+          <input id="edRecorder" list="recorderList" placeholder="例如：伊丝塔" autocomplete="off">
+          <datalist id="recorderList"></datalist>
+        </label>
+      </div>
+
+      <div id="editorDup" class="dup-warn" hidden></div>
+
+      <div class="form-label">
+        <span>正文条目</span>
+        <span class="muted">每条一行，自动编号；Ctrl+Enter 保存</span>
+      </div>
+      <div id="edItems" class="ed-items"></div>
+      <button id="btnAddItem" class="btn block dashed">＋ 添加一条</button>
+
+      <details class="preview-box">
+        <summary>预览即将写入的文件（严格按原格式）</summary>
+        <pre id="edPreview"></pre>
+      </details>
+    </div>
+
+    <div class="modal-foot">
+      <span id="editorHint" class="muted"></span>
+      <div class="spacer"></div>
+      <button class="btn" data-close="editorModal">取消</button>
+      <button id="btnEditorSave" class="btn primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= GitHub 同步弹窗 ================= -->
+<div id="gitModal" class="modal" hidden>
+  <div class="modal-box wide">
+    <div class="modal-head">
+      <h2>GitHub 同步</h2>
+      <button class="ghost-mini" data-close="gitModal">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="git-state" id="gitStatusBox">读取中…</div>
+
+      <div class="form-row">
+        <label class="grow">仓库地址
+          <input id="gitRepoUrl" placeholder="https://github.com/用户名/仓库名.git" autocomplete="off">
+        </label>
+        <label>分支
+          <input id="gitBranch" placeholder="main" autocomplete="off" style="width:110px">
+        </label>
+      </div>
+
+      <label class="form-row">访问令牌（Personal Access Token，仅保存在本机 config.json，不会提交）
+        <input id="gitToken" type="password" placeholder="github_pat_… 或 ghp_…（留空则沿用已保存的令牌）" autocomplete="off">
+      </label>
+
+      <div class="form-row">
+        <label>代理模式
+          <select id="gitProxyMode">
+            <option value="auto">自动（读取 Windows 系统代理）</option>
+            <option value="custom">手动指定</option>
+            <option value="none">不使用代理</option>
+          </select>
+        </label>
+        <label class="grow">代理地址
+          <input id="gitProxyValue" placeholder="http://127.0.0.1:7897" autocomplete="off">
+        </label>
+      </div>
+      <div class="proxy-line" id="proxyLine"></div>
+
+      <label class="checkbox">
+        <input id="chkAutoResolve" type="checkbox" checked>
+        冲突时自动保留两份（远程版本留在原文件，本机版本另存为「(本机副本)」）
+      </label>
+
+      <div class="git-buttons">
+        <button id="btnGitInit" class="btn">初始化仓库</button>
+        <button id="btnGitSetRemote" class="btn">保存并绑定远程</button>
+        <button id="btnGitClone" class="btn">从远程克隆</button>
+        <button id="btnGitCommit" class="btn">提交本地改动</button>
+        <button id="btnGitPull" class="btn">拉取下载</button>
+        <button id="btnGitPush" class="btn">上传推送</button>
+        <button id="btnGitSync" class="btn primary">一键同步</button>
+        <button id="btnGitProxyTest" class="btn">应用代理设置</button>
+        <button id="btnGitRefresh" class="btn">刷新状态</button>
+      </div>
+
+      <pre id="gitOutput" class="git-output"></pre>
+      <div id="gitHint" class="git-hint" hidden></div>
+
+      <details class="hint-box">
+        <summary>第一次使用？点这里看三步说明</summary>
+        <ol>
+          <li>在 GitHub 上新建一个空仓库（私有也行），把地址填到上面的「仓库地址」。</li>
+          <li>生成访问令牌：GitHub → Settings → Developer settings → Personal access tokens → Fine-grained token，权限给该仓库的 <b>Contents: Read and write</b>，粘贴到「访问令牌」。</li>
+          <li>点「保存并绑定远程」→「一键同步」。之后每次写完日记点一次「一键同步」即可。</li>
+        </ol>
+        <p class="muted">其他人加入：把本文件夹（或本程序压缩包）给对方，填同一个仓库地址与自己的令牌，点「从远程克隆」；之后用「一键同步」共享。</p>
+        <p class="muted">📖 完整图文步骤见同目录下的 <b>GitHub同步操作指南.md</b>，里面有建仓库、生成令牌的逐屏说明和报错对照表。</p>
+        <p class="muted">🔌 <b>连不上 GitHub？</b>把上面的「代理模式」改成「自动（读取 Windows 系统代理）」，
+        点「应用代理设置」再点「一键同步」。如果你的网络本来就能直连，就选「不使用代理」。</p>
+      </details>
+    </div>
+
+    <div class="modal-foot">
+      <span class="muted">令牌只写入本机 config.json，且已被 .gitignore 排除</span>
+      <div class="spacer"></div>
+      <button class="btn" data-close="gitModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 音源清单弹窗 ================= -->
+<div id="sourcesModal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>音源清单 sources.txt</h2>
+      <button class="ghost-mini" data-close="sourcesModal">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="muted">
+        一行一个音源：可以写 <code>music</code> 文件夹里的文件名（支持子目录），也可以写 <code>https://</code> 开头的网络直链。
+        以 <code>#</code> 开头的行是注释。<b>把这个文件清空或删掉，程序就自动扫描 music 文件夹里的全部音频。</b>
+      </p>
+      <textarea id="sourcesText" class="sources-area" spellcheck="false"
+        placeholder="# 每行一个音源&#10;晨间钢琴.mp3&#10;夜晚/白噪音.flac&#10;https://example.com/stream.mp3"></textarea>
+      <div class="muted small" id="sourcesHint"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="btnSourcesReload" class="btn">重新载入</button>
+      <div class="spacer"></div>
+      <button class="btn" data-close="sourcesModal">取消</button>
+      <button id="btnSourcesSave" class="btn primary">保存并重新扫描</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<!-- ================= 大事记 ================= -->
+<div id="msModal" class="modal" hidden>
+  <div class="modal-box ms-box">
+    <div class="ms-head">
+      <button id="btnMsAdd" class="ms-add" type="button" title="添加一条大事记">＋</button>
+      <div class="ms-title">
+        <h2>大事记</h2>
+        <span id="msCount" class="muted small"></span>
+      </div>
+      <button id="btnMsSort" class="ms-tool" type="button" title="切换排序">新 → 旧</button>
+      <button id="btnMsClose" class="ghost-mini ms-close" type="button" title="关闭（也可以点四周灰暗处）">✕</button>
+    </div>
+
+    <div class="ms-body">
+      <div id="msList" class="ms-list"></div>
+
+      <!-- 添加面板：盖在列表上面 -->
+      <div id="msAddPanel" class="ms-addpanel" hidden>
+        <div class="ms-tabs">
+          <button class="ms-tab on" data-tab="diary" type="button">从群日记选</button>
+          <button class="ms-tab" data-tab="manual" type="button">手动填写</button>
+          <div class="spacer"></div>
+          <button id="btnMsAddCancel" class="linkish" type="button">取消</button>
+        </div>
+
+        <div id="msTabDiary" class="ms-tabpane">
+          <input id="msPickSearch" class="ms-search" placeholder="搜索日记内容，点条目右边的 ＋ 加进大事记…"
+                 autocomplete="off">
+          <div id="msPickList" class="ms-picklist"></div>
+        </div>
+
+        <div id="msTabManual" class="ms-tabpane" hidden>
+          <div class="form-row">
+            <label>日期
+              <input id="msDate" type="date">
+            </label>
+            <label class="grow">记录人
+              <input id="msRecorder" list="recorderList" placeholder="谁记的" autocomplete="off">
+            </label>
+          </div>
+          <textarea id="msText" class="sources-area ms-textarea"
+                    placeholder="发生了什么…（可多行）" spellcheck="false"></textarea>
+          <div class="ms-manual-foot">
+            <span id="msManualHint" class="muted small"></span>
+            <div class="spacer"></div>
+            <button id="btnMsSave" class="btn primary" type="button">添加</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ms-foot">
+      <span class="muted small">保存在 <code>大事记.txt</code>，和日记一样是纯文本，可直接用记事本改</span>
+      <div class="spacer"></div>
+      <button id="btnMsReload" class="linkish" type="button">重新读取文件</button>
+      <button id="btnMsOpenFile" class="linkish" type="button">📂 打开所在文件夹</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
